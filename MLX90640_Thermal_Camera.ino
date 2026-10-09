@@ -35,10 +35,11 @@ void setup() {
 
 void loop(void) {
   readTempValues();
-  delay(30); //delay in milliseconds, min of 15?
+  delay(30); //delay in milliseconds, min of 15? 64Hz
 }
 
 void readTempValues() {
+  int Tpix = 0;
   for (byte x = 0 ; x < 2 ; x++) 
   {
     uint16_t mlx90640Frame[834];
@@ -54,30 +55,41 @@ void readTempValues() {
 
     float tr = Ta - TA_SHIFT; 
 
-    MLX90640_CalculateTo(mlx90640Frame, &mlx90640, EMMISIVITY, tr, tempValues);
+    MLX90640_CalculateTo(mlx90640Frame, &mlx90640, EMMISIVITY, tr, tempValues); //able to add thresholding to this function, prevents recursion
   }
+
+
+
   Serial.println("\r\n===========================WaveShare MLX90640 Thermal Camera===============================");
   for (int i = 0; i < 768; i++) {
     if (((i % 32) == 0) && (i != 0)) {
       Serial.println(" ");
     }
-    if ((int)tempValues[i] <= 35 && (int)tempValues[i] > 25) {
+    if ((int)tempValues[i] > 0) {
       Serial.print("█");
-    }
-    else if ((int)tempValues[i] <= 25 && (int)tempValues[i] > 23) {
-      Serial.print("▓");
-    }
-    else if ((int)tempValues[i] <= 23 && (int)tempValues[i] > 21) {
-      Serial.print("▒");
-    }
-    else if ((int)tempValues[i] <= 21) {
-      Serial.print("░");
+      Tpix++;
     }
     else {
-      Serial.print("∙");
+      Serial.print(" ");
     }
+    // if ((int)tempValues[i] <= 35 && (int)tempValues[i] > 30) {
+    //   Serial.print("█");
+    // }
+    // else if ((int)tempValues[i] <= 30 && (int)tempValues[i] > 25) {
+    //   Serial.print("▓");
+    // }
+    // else if ((int)tempValues[i] <= 25 && (int)tempValues[i] > 20) {
+    //   Serial.print("▒");
+    // }
+    // else if ((int)tempValues[i] <= 20) {
+    //   Serial.print("░");
+    // }
+    // else {
+    //   Serial.print("∙");
+    // }
     Serial.print(" ");
   }
+  Serial.println(Tpix);
   Serial.println("\r\n===========================WaveShare MLX90640 Thermal Camera===============================");
 }
 
