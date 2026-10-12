@@ -387,12 +387,12 @@ void MLX90640_CalculateTo(uint16_t *frameData, const paramsMLX90640 *params, flo
             
             To = sqrt(sqrt(irData / (alphaCompensated * alphaCorrR[range] * (1 + params->ksTo[range] * (To - params->ct[range]))) + taTr)) - 273.15;
 
-            if (To > 28) { //
-                To = 1;
-            }
-            else {
-                To = 0;
-            }
+            // if (To > 28) { //
+            //     To = 1;
+            // }
+            // else {
+            //     To = 0;
+            // }
 
             result[pixelNumber] = To;
         }
