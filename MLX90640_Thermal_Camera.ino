@@ -12,18 +12,15 @@
 #define NUM_PIXELS        (GRID_W * GRID_H)
 
 #define WARM_DELTA        2.0f   // deg C above background to count as "person"
-#define BG_ALPHA          0.01f  // background adaptation rate (non-person pixels)
 #define MIN_BLOB_PIXELS   25     // reject blobs smaller than this (noise)
 #define MAX_BLOBS         6
 #define MAX_TRACKS        6
-#define MAX_MATCH_DIST    14.0f  // max pixels a person can move between frames
-#define MAX_MISSED_FRAMES 4      // frames a track can vanish before it's finished
+#define MAX_MATCH_DIST    12.0f  // max pixels a person can move between frames
+#define MAX_MISSED_FRAMES 2      // frames a track can vanish before it's finished
 
 paramsMLX90640 mlx90640;
 const byte MLX90640_address = 0x33; //Default 7-bit unshifted address of the MLX90640
 static float tempValues[32 * 24];
-
-//enum Direction {DIR_IN, DIR_OUT};
 
 struct Blob {
   float cx, cy;
@@ -37,7 +34,6 @@ struct Track {
   float iX, iY;
   float x, y;
   uint8_t missed;
-  int max_area;
 };
 
 static float background[NUM_PIXELS];
@@ -48,9 +44,7 @@ static Blob blobs[MAX_BLOBS];
 static Track tracks[MAX_TRACKS];
 static uint8_t nextTrackId = 1;
 
-static int peopleTotal = 0; //unused
-static int peopleIn = 0;
-static int peopleOut = 0;
+static int peopleTotal = 0;
 
 bool readTempValues() {
   for (int x = 0; x < 2; x++) {
@@ -58,6 +52,7 @@ bool readTempValues() {
     int status = MLX90640_GetFrameData(MLX90640_address, mlx90640Frame);
     if (status < 0) {
       x--;
+      Serial.println("Bad Frames");
     }
     else {
       float Ta = MLX90640_GetTa(mlx90640Frame, &mlx90640);
@@ -70,19 +65,6 @@ bool readTempValues() {
 
 // ------------------------- foreground mask ---------------------------------
 
-// void updateBackground() { //distinguishes foreground if its >3C above background
-//   if (!backgroundReady) {
-//     for (int i = 0; i < NUM_PIXELS; i++) {
-//       background += (tempValues[i] / NUM_PIXELS);
-//     }
-//     Serial.println(background);
-//     backgroundReady = true;
-//   }
-//   for (int i = 0; i < NUM_PIXELS; i++) {
-//     foreground[i] = (tempValues[i] - background) > WARM_DELTA;
-//   }
-// }
-
 void updateBackgroundAndMask() { //distinguishes foreground if its >3C above background
   if (!backgroundReady) {
     for (int i = 0; i < NUM_PIXELS; i++) 
@@ -91,21 +73,16 @@ void updateBackgroundAndMask() { //distinguishes foreground if its >3C above bac
   }
   for (int i = 0; i < NUM_PIXELS; i++) {
     foreground[i] = (tempValues[i] - background[i]) > WARM_DELTA;
-    if (!foreground[i]) {
-      // only adapt on non-person pixels so a person doesn't get absorbed
-      background[i] += BG_ALPHA * (tempValues[i] - background[i]); //no clue, increases background by value?
-    }
   }
 }
 // ------------------------- blob detection ----------------------------------
 
 int findBlobs() {
-  static bool visited[NUM_PIXELS];
+  bool visited[NUM_PIXELS] = {};
   static int16_t stack[NUM_PIXELS];
-  memset(visited, 0, sizeof(visited));
   int count = 0;
-  blobs[count].max_area = 0;
   for (int i = 0; i < NUM_PIXELS && count < MAX_BLOBS; i++) {
+    blobs[count].max_area = 0;
     if (!foreground[i] || visited[i]) {
       continue;
     }
@@ -184,6 +161,7 @@ void updateTracks(int numBlobs) {
     if (bestB >= 0) {
       tracks[t].x = blobs[bestB].cx;
       tracks[t].y = blobs[bestB].cy;
+      getTrackDirection(tracks[t]);
       tracks[t].missed = 0;
       blobUsed[bestB] = true;
       trackMatched[t] = true;
@@ -197,11 +175,7 @@ void updateTracks(int numBlobs) {
     }
     tracks[t].missed++;
     if (tracks[t].missed > MAX_MISSED_FRAMES) {
-      //finishTrack(tracks[t]);
       tracks[t].active = false;
-    }
-    if (tracks[t].active) { //deterines if tracks have crossed
-      getTrackDirection(tracks[t]);
     }
   }
 
@@ -217,9 +191,6 @@ void updateTracks(int numBlobs) {
         tracks[t].iX = tracks[t].x = blobs[b].cx;
         tracks[t].iY = tracks[t].y = blobs[b].cy;
         tracks[t].missed = 0;
-
-        tracks[t].max_area = blobs[b].max_area;
-
         break;
       }
     }
@@ -229,16 +200,14 @@ void updateTracks(int numBlobs) {
 void getTrackDirection(Track &t) {
   if (t.iX < 12 && t.x > 20) {
     t.iX = t.x;
-    peopleIn++;
-    Serial.print("Went In | Count: ");
-    Serial.println(peopleIn-peopleOut);
+    Serial.print("Went In  | Count: ");
+    Serial.println(++peopleTotal);
     return;
   }
   else if (t.iX > 20 && t.x < 12) {
     t.iX = t.x;
-    peopleOut++;
     Serial.print("Went Out | Count: ");
-    Serial.println(peopleIn-peopleOut);
+    Serial.println(--peopleTotal);
     return;
   }
 }
@@ -291,12 +260,11 @@ void setup() {
   // Serial.println(WiFi.localIP());
 
   Wire.begin();
-  Wire.setClock(400000); 
+
   Wire.beginTransmission((uint8_t)MLX90640_address);
   if (Wire.endTransmission() != 0) {
     Serial.println("MLX90640 not detected at default I2C address. scan the device addr...");
     Device_Scan();
-
   }
   else {
     Serial.println("MLX90640 online!");
@@ -307,7 +275,7 @@ void setup() {
   if (status != 0) Serial.println("Failed to load system parameters");
   status = MLX90640_ExtractParameters(eeMLX90640, &mlx90640);
   if (status != 0) Serial.println("Parameter extraction failed");
-  MLX90640_SetRefreshRate(MLX90640_address, 0x05); 
+  MLX90640_SetRefreshRate(MLX90640_address, 0x05); //refresh rate
   Wire.setClock(800000);
 }
 
@@ -315,6 +283,5 @@ void loop() {
   readTempValues();               // fills tempValues[]
   updateBackgroundAndMask();      // fills foreground[]
   int n = findBlobs();            // fills blobs[]
-  //Serial.println(n);
   updateTracks(n);                // matches blobs to tracks, finishes old ones
 }
