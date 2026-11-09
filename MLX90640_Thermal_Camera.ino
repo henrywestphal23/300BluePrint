@@ -5,21 +5,30 @@
 #include <WiFi.h>
 
 #define EMMISIVITY 0.97 //how well an object reflects thermal radiation
-#define TA_SHIFT 8 //ambient temperature of the device?
+#define TA_SHIFT 8 //ambient temperature of the device
 
 #define GRID_W            32
 #define GRID_H            24
 #define NUM_PIXELS        (GRID_W * GRID_H)
 
-#define WARM_DELTA        2.0f   // deg C above background to count as "person"
-#define MIN_BLOB_PIXELS   25     // reject blobs smaller than this (noise)
+#define WARM_DELTA        2.0f
+#define MIN_BLOB_PIXELS   25
 #define MAX_BLOBS         6
 #define MAX_TRACKS        6
 #define MAX_MATCH_DIST    12.0f  // max pixels a person can move between frames
-#define MAX_MISSED_FRAMES 2      // frames a track can vanish before it's finished
+#define MAX_MISSED_FRAMES 2
+
+/*TODO: 
+Adaptive background averaging
+Average inital bootframe
+Update to improve tracking multiple tracks (Increasing frames will allow lower match distance)
+WiFI integration
+Increasing refresh rate (Determine how quickly we can process frames)
+*/
+
 
 paramsMLX90640 mlx90640;
-const byte MLX90640_address = 0x33; //Default 7-bit unshifted address of the MLX90640
+const byte MLX90640_address = 0x33;
 static float tempValues[32 * 24];
 
 struct Blob {
@@ -275,13 +284,14 @@ void setup() {
   if (status != 0) Serial.println("Failed to load system parameters");
   status = MLX90640_ExtractParameters(eeMLX90640, &mlx90640);
   if (status != 0) Serial.println("Parameter extraction failed");
-  MLX90640_SetRefreshRate(MLX90640_address, 0x05); //refresh rate
-  Wire.setClock(800000);
+  MLX90640_SetRefreshRate(MLX90640_address, 0x05); //refresh rate 05 = 16Hz, 06 = 32Hz, 07 = 64Hz
+  Wire.setClock(400000); //400000 for 16Hz, 1000000 for 64Hz
 }
 
 void loop() {
   readTempValues();               // fills tempValues[]
   updateBackgroundAndMask();      // fills foreground[]
   int n = findBlobs();            // fills blobs[]
+  //Serial.println(n); //debug
   updateTracks(n);                // matches blobs to tracks, finishes old ones
 }
