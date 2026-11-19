@@ -160,7 +160,7 @@ void updateTracks(int numBlobs) {
       }
       float dx = blobs[b].cx - tracks[t].x;
       float dy = blobs[b].cy - tracks[t].y;
-      float d = sqrtf(dx * dx + dy * dy);
+      float d = dx * dx + dy * dy;
       if (d < best) { 
         best = d; 
         bestB = b;
