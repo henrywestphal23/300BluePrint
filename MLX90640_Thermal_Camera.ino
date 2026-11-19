@@ -17,15 +17,21 @@
 #define MAX_TRACKS        6
 #define MAX_MATCH_DIST    12.0f  // max pixels a person can move between frames
 #define MAX_MISSED_FRAMES 2
-
+#define DRIFT 0.01
+#define SAMPLE_FRAMES 5
 /*TODO: 
-Adaptive background averaging
-Average inital bootframe
-Update to improve tracking multiple tracks (Increasing frames will allow lower match distance)
-WiFI integration
+Adaptive background averaging - started 
+Average inital bootframe - started
+WiFI integrationw - started
 Increasing refresh rate (Determine how quickly we can process frames)
+Update to improve tracking multiple tracks (Increasing frames will allow lower match distance)
 */
 
+//WIFI INFO
+const char* ssid = "Team7";
+const char* password = "blueprint";
+
+WiFiServer server(80);
 
 paramsMLX90640 mlx90640;
 const byte MLX90640_address = 0x33;
@@ -53,7 +59,10 @@ static Blob blobs[MAX_BLOBS];
 static Track tracks[MAX_TRACKS];
 static uint8_t nextTrackId = 1;
 
-static int peopleTotal = 0;
+static int16_t peopleTotal = 0;
+static int16_t oldPeople = 0;
+
+// ------------------------- Calls MLX90640 values ---------------------------------
 
 bool readTempValues() {
   for (int x = 0; x < 2; x++) {
@@ -64,27 +73,34 @@ bool readTempValues() {
       Serial.println("Bad Frames");
     }
     else {
-      float Ta = MLX90640_GetTa(mlx90640Frame, &mlx90640);
-      float tr = Ta - TA_SHIFT;
-      MLX90640_CalculateTo(mlx90640Frame, &mlx90640, EMMISIVITY, tr, tempValues);
+      MLX90640_CalculateTo(mlx90640Frame, &mlx90640, EMMISIVITY, TA_SHIFT, tempValues);
     }
   }
   return true;
 }
 
-// ------------------------- foreground mask ---------------------------------
+// ------------------------- Background/Foreground ---------------------------------
 
 void updateBackgroundAndMask() { //distinguishes foreground if its >3C above background
-  if (!backgroundReady) {
-    for (int i = 0; i < NUM_PIXELS; i++) 
-    background[i] = tempValues[i];
+  if (!backgroundReady) { // move to setup?
+    for (int i = 0; i < NUM_PIXELS; i++) {
+      background[i] = tempValues[i];
+    }
     backgroundReady = true;
   }
+
   for (int i = 0; i < NUM_PIXELS; i++) {
-    foreground[i] = (tempValues[i] - background[i]) > WARM_DELTA;
+    if ((tempValues[i] - background[i]) > WARM_DELTA) {
+      foreground[i] = 1;
+    }
+    else {
+      foreground[i] = 0;
+      background[i] = background[i] + (tempValues[i] - background[i]) * DRIFT;
+    }
   }
 }
-// ------------------------- blob detection ----------------------------------
+
+// ------------------------- Detecting Blobs ----------------------------------
 
 int findBlobs() {
   bool visited[NUM_PIXELS] = {};
@@ -99,7 +115,7 @@ int findBlobs() {
     int sp = 0;
     stack[sp++] = i;
     visited[i] = true;
-    long sumX = 0, sumY = 0;
+    int sumX = 0, sumY = 0;
     int area = 0;
 
     while (sp > 0) { //counts connected pixels
@@ -140,7 +156,7 @@ int findBlobs() {
   return count;
 }
 
-// ------------------------- tracking ----------------------------------------
+// ------------------------- Tracking Blobs ----------------------------------------
 
 void updateTracks(int numBlobs) {
   bool blobUsed[MAX_BLOBS] = {false};
@@ -160,7 +176,7 @@ void updateTracks(int numBlobs) {
       }
       float dx = blobs[b].cx - tracks[t].x;
       float dy = blobs[b].cy - tracks[t].y;
-      float d = dx * dx + dy * dy;
+      float d = sqrtf(dx * dx + dy * dy);
       if (d < best) { 
         best = d; 
         bestB = b;
@@ -209,19 +225,22 @@ void updateTracks(int numBlobs) {
 void getTrackDirection(Track &t) {
   if (t.iX < 12 && t.x > 20) {
     t.iX = t.x;
+    t.id = nextTrackId++;
     Serial.print("Went In  | Count: ");
     Serial.println(++peopleTotal);
     return;
   }
   else if (t.iX > 20 && t.x < 12) {
     t.iX = t.x;
+    t.id = nextTrackId++;
     Serial.print("Went Out | Count: ");
     Serial.println(--peopleTotal);
     return;
   }
 }
 
-//-------------------------------------------------------------------------------------------------//
+// ------------------------- Device Connections ----------------------------------------
+
 void Device_Scan() {
   byte error, address;
   int nDevices;
@@ -252,21 +271,14 @@ void Device_Scan() {
     Serial.println("done");
 }
 
+// ------------------------- Main Loop ----------------------------------------
 void setup() {
   Serial.begin(115200);
 
-  // WiFi.mode(WIFI_STA);
-  // WiFi.begin(ssid, password);
-  // Serial.println("\nConnecting to WiFi Network ..");
-
-  // while(WiFi.status() != WL_CONNECTED){
-  //     Serial.print(".");
-  //     delay(100);
-  // }
-
-  // Serial.println("\nConnected to the WiFi network");
-  // Serial.print("Local ESP32 IP: ");
-  // Serial.println(WiFi.localIP());
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(ssid, password);
+  Serial.println(WiFi.softAPIP());
+  server.begin();
 
   Wire.begin();
 
@@ -285,13 +297,25 @@ void setup() {
   status = MLX90640_ExtractParameters(eeMLX90640, &mlx90640);
   if (status != 0) Serial.println("Parameter extraction failed");
   MLX90640_SetRefreshRate(MLX90640_address, 0x05); //refresh rate 05 = 16Hz, 06 = 32Hz, 07 = 64Hz
+  MLX90640_SetResolution(MLX90640_address, 1); // Set ADC resolution (0-3 corresponding to 16-19 bits)
   Wire.setClock(400000); //400000 for 16Hz, 1000000 for 64Hz
 }
 
 void loop() {
+  WiFiClient client = server.available();
+
   readTempValues();               // fills tempValues[]
   updateBackgroundAndMask();      // fills foreground[]
   int n = findBlobs();            // fills blobs[]
-  //Serial.println(n); //debug
   updateTracks(n);                // matches blobs to tracks, finishes old ones
+
+  while (client.available()) {
+    client.read();
+    if (peopleTotal != oldPeople) {
+      client.print("People In Room: ");
+      client.print(peopleTotal);
+      oldPeople = peopleTotal;
+    }
+  }
+
 }
